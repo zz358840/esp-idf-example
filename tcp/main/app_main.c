@@ -30,6 +30,48 @@
 #include "esp_log.h"
 #include "mqtt_client.h"
 
+#include <driver/rmt.h>
+#define RMT_TX_GPIO 18
+#define RMT_TX_CHANNEL RMT_CHANNEL_0
+#define LED_NUMBER 25
+#include "led_strip.h"
+
+led_strip_t *strip;
+char mqtt_data[20];
+
+void led_loop(int num, uint32_t red, uint32_t green, uint32_t blue, int refresh_time, int delay){
+    for (int i = 0; i < num; i++) {
+        // Write RGB values to strip driver
+        ESP_ERROR_CHECK(strip->set_pixel(strip, i, red, green, blue));
+        ESP_ERROR_CHECK(strip->refresh(strip, refresh_time));
+        vTaskDelay(pdMS_TO_TICKS(delay));
+    }
+}
+void led_set(int num,uint32_t red, uint32_t green, uint32_t blue){
+    ESP_ERROR_CHECK(strip->set_pixel(strip, num, red, green, blue));
+}
+void led_show(int refresh_time){
+    ESP_ERROR_CHECK(strip->refresh(strip, refresh_time));
+}
+void led_clear(int refresh_time){
+    ESP_ERROR_CHECK(strip->clear(strip, refresh_time));
+}
+
+static void mqtt_data_cb(char *data){
+    uint32_t color[3]={0,0,0};
+    int count=0;
+    char *p = strtok(data, ",");
+    color[0]=atoi(p);
+    while(p != NULL){
+        // printf("%s\n",p);
+        color[count]=atoi(p);
+        p = strtok(NULL, ",");
+        count++;
+    }
+    led_set(12,color[0],color[1],color[2]);
+    led_show(1000);
+}
+
 static const char *TAG = "MQTT_EXAMPLE";
 
 
@@ -62,14 +104,17 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
         ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+        msg_id = esp_mqtt_client_subscribe(client, "color", 0);
         ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-        ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+        // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+        // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-        ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
+        // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+        // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+
+        // msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
+        // ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -87,9 +132,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
         break;
     case MQTT_EVENT_DATA:
-        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-        printf("DATA=%.*s\r\n", event->data_len, event->data);
+        // ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+        // printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+        // printf("DATA=%.*s\r\n", event->data_len, event->data);
+        if(strcmp(event->topic,"color")){
+            sprintf(mqtt_data, "%.*s",event->data_len, event->data);
+            mqtt_data_cb(mqtt_data);
+        }
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
@@ -110,7 +159,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 static void mqtt_app_start(void)
 {
     esp_mqtt_client_config_t mqtt_cfg = {
-        .uri = CONFIG_BROKER_URL,
+        .uri = "mqtt://mqtt1.webduino.io:1883",
+        .username = "webduino",
+        .password = "webduino",
     };
 #if CONFIG_BROKER_URL_FROM_STDIN
     char line[128];
@@ -145,6 +196,25 @@ static void mqtt_app_start(void)
 
 void app_main(void)
 {
+    rmt_config_t config = RMT_DEFAULT_CONFIG_TX(RMT_TX_GPIO, RMT_TX_CHANNEL);
+    // set counter clock to 40MHz
+    config.clk_div = 1;
+
+    ESP_ERROR_CHECK(rmt_config(&config));
+    ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
+
+    // install ws2812 driver
+    led_strip_config_t strip_config = LED_STRIP_DEFAULT_CONFIG(LED_NUMBER, (led_strip_dev_t)config.channel);
+    strip = led_strip_new_rmt_ws2812(&strip_config);
+    if (!strip) {
+        ESP_LOGE(TAG, "install WS2812 driver failed");
+    }
+    // Clear LED strip (turn off all LEDs)
+    // led_clear(1000);
+
+    led_loop(25,10,0,0,1000,100);
+    led_clear(1000);
+
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
@@ -167,5 +237,11 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
+    led_loop(25,0,10,0,1000,100);
+    led_clear(1000);
+
     mqtt_app_start();
+
+    led_loop(25,0,0,10,1000,100);
+    led_clear(1000);
 }
