@@ -21,6 +21,8 @@
 
 #define RMT_TX_CHANNEL RMT_CHANNEL_0
 
+rmt_item32_t *item_buff;
+
 static const char *TAG = "ws2812";
 #define STRIP_CHECK(a, str, goto_tag, ret_value, ...)                             \
     do                                                                            \
@@ -33,16 +35,16 @@ static const char *TAG = "ws2812";
         }                                                                         \
     } while (0)
 
-#define WS2812_T0H_NS (350)
-#define WS2812_T0L_NS (1000)
-#define WS2812_T1H_NS (1000)
-#define WS2812_T1L_NS (350)
+#define WS2812_T0H_NS (300)
+#define WS2812_T0L_NS (800)
+#define WS2812_T1H_NS (800)
+#define WS2812_T1L_NS (800)
 #define WS2812_RESET_US (280)
 
-static uint32_t ws2812_t0h_ticks = 0;
-static uint32_t ws2812_t1h_ticks = 0;
-static uint32_t ws2812_t0l_ticks = 0;
-static uint32_t ws2812_t1l_ticks = 0;
+static uint32_t ws2812_t0h_ticks = 3;
+static uint32_t ws2812_t1h_ticks = 8;
+static uint32_t ws2812_t0l_ticks = 8;
+static uint32_t ws2812_t1l_ticks = 8;
 
 typedef struct {
     led_strip_t parent;
@@ -113,9 +115,74 @@ err:
 static esp_err_t ws2812_refresh(led_strip_t *strip, uint32_t timeout_ms)
 {
     esp_err_t ret = ESP_OK;
+
+
+    //rmt_item32_t reset_item[2];
+    ////reset_item[0].val = 0x80030FFF;
+    //reset_item[0].val = 0x0FFF8003;
+    //reset_item[0].val = 0x0FFF0FFF;
+    //reset_item[1].val = 0;
     ws2812_t *ws2812 = __containerof(strip, ws2812_t, parent);
+
+    const rmt_item32_t bit0 = {{{ ws2812_t0h_ticks, 1, ws2812_t0l_ticks, 0 }}}; //Logical 0
+    const rmt_item32_t bit1 = {{{ ws2812_t1h_ticks, 1, ws2812_t1l_ticks, 0 }}}; //Logical 1
+    const rmt_item32_t reset_item = {{{0x3,0,0xfff,0}}};
+    const rmt_item32_t tx_end_item ={{{0,0,0,0}}};
+    size_t size = 0;
+    size_t num = 0;
+    uint8_t *psrc = (uint8_t *)ws2812->buffer;
+    rmt_item32_t *pdest = item_buff;
+
+    pdest->val = reset_item.val;
+    pdest++;
+
+
+    pdest->val = tx_end_item.val;   
+    STRIP_CHECK(rmt_write_items(ws2812->rmt_channel, item_buff, 2, true) == ESP_OK,
+                "transmit RMT RESET item failed", err, ESP_FAIL);
+
+/*
+    while (size < 25) {
+        for(int j=0; j<3; j++) {
+            for (int i=0; i<8; i++) {
+                pdest = item_buff;
+                if (*psrc & (1 << (7-i))) pdest->val = bit1.val;
+                else pdest->val = bit0.val;
+                pdest++;
+                pdest->val = tx_end_item.val;
+                STRIP_CHECK(rmt_write_items(ws2812->rmt_channel, item_buff, 2, true) == ESP_OK,
+                    "transmit RMT RESET item failed", err, ESP_FAIL);
+            }    
+        }
+
+        size++;
+    }
+*/
+/*
+    while (size < 25*3) {
+        for (int i = 0; i < 8; i++) {
+            // MSB first
+            if (*psrc & (1 << (7 - i))) {
+                pdest->val =  bit1.val;
+            } else {
+                pdest->val =  bit0.val;
+            }
+            num++;
+            pdest++;
+        }
+        size++;
+        psrc++;
+    }
+    pdest->val = tx_end_item.val;
+
+    STRIP_CHECK(rmt_write_items(ws2812->rmt_channel, item_buff, 602, true) == ESP_OK,
+                "transmit RMT RESET item failed", err, ESP_FAIL);
+*/
+
     STRIP_CHECK(rmt_write_sample(ws2812->rmt_channel, ws2812->buffer, ws2812->strip_len * 3, true) == ESP_OK,
                 "transmit RMT samples failed", err, ESP_FAIL);
+    //STRIP_CHECK(rmt_write_items(ws2812->rmt_channel, reset_item, 2, true) == ESP_OK,
+    //            "transmit RMT RESET item failed", err, ESP_FAIL);
     return rmt_wait_tx_done(ws2812->rmt_channel, pdMS_TO_TICKS(timeout_ms));
 err:
     return ret;
@@ -146,15 +213,22 @@ led_strip_t *led_strip_new_rmt_ws2812(const led_strip_config_t *config)
     ws2812_t *ws2812 = calloc(1, ws2812_size);
     STRIP_CHECK(ws2812, "request memory for ws2812 failed", err, NULL);
 
-    uint32_t counter_clk_hz = 0;
-    STRIP_CHECK(rmt_get_counter_clock((rmt_channel_t)config->dev, &counter_clk_hz) == ESP_OK,
-                "get rmt counter clock failed", err, NULL);
+
+    //item_buff = calloc(1, sizeof(rmt_item32_t) * (config->max_leds * 24 + 2));
+    //item_buff = calloc(1, 1208);
+    item_buff = calloc(1, 2408);
+
+    //uint32_t counter_clk_hz = 0;
+    //STRIP_CHECK(rmt_get_counter_clock((rmt_channel_t)config->dev, &counter_clk_hz) == ESP_OK,
+    //            "get rmt counter clock failed", err, NULL);
     // ns -> ticks
+   /* 
     float ratio = (float)counter_clk_hz / 1e9;
     ws2812_t0h_ticks = (uint32_t)(ratio * WS2812_T0H_NS);
     ws2812_t0l_ticks = (uint32_t)(ratio * WS2812_T0L_NS);
     ws2812_t1h_ticks = (uint32_t)(ratio * WS2812_T1H_NS);
     ws2812_t1l_ticks = (uint32_t)(ratio * WS2812_T1L_NS);
+    */
 
     // set ws2812 to rmt adapter
     rmt_translator_init((rmt_channel_t)config->dev, ws2812_rmt_adapter);
@@ -177,8 +251,8 @@ led_strip_t * led_strip_init(uint8_t channel, uint8_t gpio, uint16_t led_num)
     static led_strip_t *pStrip;
 
     rmt_config_t config = RMT_DEFAULT_CONFIG_TX(gpio, channel);
-    // set counter clock to 40MHz
-    config.clk_div = 2;
+    // set counter clock to 10MHz
+    config.clk_div = 8;
 
     ESP_ERROR_CHECK(rmt_config(&config));
     ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
