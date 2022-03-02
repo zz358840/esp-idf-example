@@ -36,6 +36,9 @@
 #define LED_NUMBER 25
 #include "led_strip.h"
 
+
+SemaphoreHandle_t xMutex = NULL;
+
 led_strip_t *strip;
 char mqtt_data[20];
 
@@ -58,6 +61,8 @@ void led_clear(int refresh_time){
 }
 
 static void mqtt_data_cb(char *data){
+    xSemaphoreTake(xMutex, portMAX_DELAY);
+
     uint32_t color[3]={0,0,0};
     int count=0;
     char *p = strtok(data, ",");
@@ -68,8 +73,12 @@ static void mqtt_data_cb(char *data){
         p = strtok(NULL, ",");
         count++;
     }
+
+
     led_set(12,color[0],color[1],color[2]);
     led_show(1000);
+    
+    xSemaphoreGive(xMutex);
 }
 
 static const char *TAG = "MQTT_EXAMPLE";
@@ -196,12 +205,18 @@ static void mqtt_app_start(void)
 
 void app_main(void)
 {
+    xMutex = xSemaphoreCreateMutex();
+
     rmt_config_t config = RMT_DEFAULT_CONFIG_TX(RMT_TX_GPIO, RMT_TX_CHANNEL);
-    // set counter clock to 40MHz
-    config.clk_div = 1;
+    // set counter clock to 10MHz
+    config.clk_div = 8;
+
+    config.mem_block_num = 2;
 
     ESP_ERROR_CHECK(rmt_config(&config));
     ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
+
+    ESP_ERROR_CHECK(rmt_set_idle_level(config.channel, 1, 0));
 
     // install ws2812 driver
     led_strip_config_t strip_config = LED_STRIP_DEFAULT_CONFIG(LED_NUMBER, (led_strip_dev_t)config.channel);
@@ -212,7 +227,7 @@ void app_main(void)
     // Clear LED strip (turn off all LEDs)
     // led_clear(1000);
 
-    led_loop(25,10,0,0,1000,100);
+    led_loop(25,0,0xA,0,1000,100);
     led_clear(1000);
 
     ESP_LOGI(TAG, "[APP] Startup..");
@@ -237,11 +252,32 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
-    led_loop(25,0,10,0,1000,100);
+    led_loop(25,0xA,0,0,1000,100);
     led_clear(1000);
 
     mqtt_app_start();
 
-    led_loop(25,0,0,10,1000,100);
+    led_loop(25,0,0,0xA,1000,100);
     led_clear(1000);
+/*
+    int i = 0;
+    while(1) {
+        //led_loop(25,0,0,0,10,1);
+        led_clear(1);
+        vTaskDelay(pdMS_TO_TICKS(1));
+        i++;
+        if (i > 100) {
+            led_set(12,0xA,0,0);
+            led_show(10);
+            vTaskDelay(pdMS_TO_TICKS(1));
+            if (i>200) {
+                led_set(12,0,0,0xA);
+                led_show(10);
+                vTaskDelay(pdMS_TO_TICKS(1));
+                if (i > 300) i = 0;
+            }
+
+        }
+    }
+*/    
 }
